@@ -1,0 +1,11 @@
+streamlit
+python-dotenv
+torch
+pinecone
+langchain
+langchain-openai
+langchain-pinecone
+langchain-huggingface
+langchain-core
+Pillow
+sentence-transformers
