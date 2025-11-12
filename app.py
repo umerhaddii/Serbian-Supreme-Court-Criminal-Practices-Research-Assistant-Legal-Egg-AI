@@ -4,11 +4,11 @@ import streamlit as st
 from dotenv import load_dotenv
 from pinecone import Pinecone
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain.chains.retrieval_qa.base import RetrievalQA
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
 from langchain_pinecone import PineconeVectorStore
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.prompts import PromptTemplate
 import time
 
 import warnings
@@ -141,24 +141,20 @@ refinement_prompt = PromptTemplate(
 # Create an LLMChain for query refinement using RunnableLambda
 refinement_chain = refinement_prompt | llm
 
-# Combine the system prompt with the retrieval prompt template in English
+# Combine the system prompt with the retrieval prompt template - UPDATED FORMAT
 combined_template = f"""{system_prompt}
 
 Please answer the following question using only the context provided:
 {{context}}
 
-Question: {{question}}
+Question: {{input}}
 Answer:"""
 
 retrieval_prompt = ChatPromptTemplate.from_template(combined_template)
 
-# Create a retrieval chain with the combined prompt
-retrieval_chain = RetrievalQA.from_chain_type(
-    llm=llm,
-    chain_type="stuff",
-    retriever=retriever,
-    chain_type_kwargs={"prompt": retrieval_prompt}
-)
+# Create a retrieval chain - MODERN APPROACH
+document_chain = create_stuff_documents_chain(llm, retrieval_prompt)
+retrieval_chain = create_retrieval_chain(retriever, document_chain)
 
 def process_query(query: str):
     try:
@@ -187,7 +183,8 @@ def process_query(query: str):
         # Use the refined query in the retrieval chain with retry logic
         for attempt in range(max_retries):
             try:
-                response_msg = retrieval_chain.invoke(refined_query)
+                # UPDATED: New format uses "input" instead of query string directly
+                response_msg = retrieval_chain.invoke({"input": refined_query})
                 break
             except Exception as e:
                 if "429" in str(e) and attempt < max_retries - 1:
@@ -196,9 +193,9 @@ def process_query(query: str):
                 else:
                     raise e
 
-        # Corrected extraction of the response
+        # UPDATED: Extract response from new format
         if isinstance(response_msg, dict):
-            response = response_msg.get("result", "")
+            response = response_msg.get("answer", "")
         elif hasattr(response_msg, 'content'):
             response = response_msg.content
         else:
@@ -261,7 +258,4 @@ if prompt := st.chat_input("ask question..."):
     with st.chat_message("assistant"):
         response = process_query(prompt)
         st.write(response)
-
     st.session_state.messages.append({"role": "assistant", "content": response})
-
-
