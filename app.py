@@ -7,7 +7,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_pinecone import PineconeVectorStore
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 
 import time
 import warnings
@@ -241,4 +241,5 @@ if prompt := st.chat_input("Ask a legal question..."):
         response = process_query(prompt)
         st.write(response)
     st.session_state.messages.append({"role": "assistant", "content": response})
+
 
