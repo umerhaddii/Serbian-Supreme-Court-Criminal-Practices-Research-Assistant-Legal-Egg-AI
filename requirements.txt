@@ -1,4 +1,4 @@
-streamlit==1.50.0
+streamlit
 python-dotenv
 torch
 pinecone
@@ -10,5 +10,6 @@ langchain-community==0.4
 langchain-openai==1.0.0
 langchain-pinecone==0.2.12
 langchain-huggingface==1.0.0
+
 
 
