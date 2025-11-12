@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from pinecone import Pinecone
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.chains import RetrievalQA
+from langchain.chains.retrieval_qa.base import RetrievalQA
 from langchain_pinecone import PineconeVectorStore
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.prompts import PromptTemplate
@@ -263,4 +263,5 @@ if prompt := st.chat_input("ask question..."):
         st.write(response)
 
     st.session_state.messages.append({"role": "assistant", "content": response})
+
 
