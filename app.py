@@ -241,3 +241,4 @@ if prompt := st.chat_input("Ask a legal question..."):
         response = process_query(prompt)
         st.write(response)
     st.session_state.messages.append({"role": "assistant", "content": response})
+
