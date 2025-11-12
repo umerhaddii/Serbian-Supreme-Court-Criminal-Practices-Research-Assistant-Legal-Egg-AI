@@ -5,15 +5,13 @@ from dotenv import load_dotenv
 from pinecone import Pinecone
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_pinecone import PineconeVectorStore
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.prompts import PromptTemplate
 import time
 import warnings
 
-# Suppress warnings
+# Suppress unwanted warnings
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 warnings.filterwarnings('ignore', message='.*pydantic.*')
 
@@ -21,7 +19,7 @@ warnings.filterwarnings('ignore', message='.*pydantic.*')
 load_dotenv()
 
 # -----------------------------
-# Helper: Get API Keys
+# Get API keys securely
 # -----------------------------
 def get_api_key(key_name: str) -> str:
     """Get API key from Streamlit secrets or environment variables"""
@@ -30,9 +28,6 @@ def get_api_key(key_name: str) -> str:
     except (KeyError, AttributeError):
         return os.getenv(key_name)
 
-# -----------------------------
-# Load API Keys
-# -----------------------------
 try:
     OPENAI_API_KEY = get_api_key("OPENAI_API_KEY")
     PINECONE_API_KEY = get_api_key("PINECONE_API_KEY")
@@ -48,31 +43,32 @@ except Exception as e:
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
 # -----------------------------
-# Initialize Model and Vector DB
+# Initialize model & vector DB
 # -----------------------------
 system_prompt = """You are an expert legal assistant specializing in Serbian Supreme Court criminal practice. Your role is to provide comprehensive, practice-oriented responses that lawyers can immediately apply to their cases.
 
-[... same long system prompt you already have ...]
+[Same long system prompt text as before]
 
-Note: Remember to respond always in English not in Serbian language.
+Always end with: "Analysis based on Supreme Court practice. Consult legal counsel for specific application.
+Note: Remember to respond always in English not in Serbian language."
 """
 
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-# Initialize Pinecone
+# Pinecone setup
 PINECONE_ENVIRONMENT = "us-east-1"
 pc = Pinecone(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
 index_name = "criminal-practices"
 index = pc.Index(index_name)
 
-# Initialize embeddings
+# Embeddings setup
 embedding_function = HuggingFaceEmbeddings(
     model_name="djovak/embedic-base",
     model_kwargs={'device': 'cpu'}
 )
 
 if not torch.cuda.is_available():
-    print("Warning: CUDA is not available. Using CPU for embeddings.")
+    print("⚠️ CUDA not available. Using CPU for embeddings.")
 
 vectorstore = PineconeVectorStore(
     index=index,
@@ -84,7 +80,7 @@ vectorstore = PineconeVectorStore(
 retriever = vectorstore.as_retriever(search_kwargs={"k": 6})
 
 # -----------------------------
-# Query Refinement Prompt
+# Query Refinement Chain
 # -----------------------------
 refinement_template = """Create a focused Serbian search query for the RAG retriever bot. Convert to Serbian language if not already. Include key terms, synonyms, and domain-specific vocabulary. Remove filler words. Output only the refined query in the following format: {{refined_query}},{{keyterms}},{{synonyms}}
 
@@ -100,7 +96,21 @@ refinement_prompt = PromptTemplate(
 refinement_chain = refinement_prompt | llm
 
 # -----------------------------
-# Retrieval Chain Construction
+# Compatibility Imports
+# -----------------------------
+try:
+    # Newer LangChain (v0.2+)
+    from langchain.chains.retrieval import create_retrieval_chain
+    from langchain.chains.combine_documents import create_stuff_documents_chain
+    USE_NEW_API = True
+except ImportError:
+    # Older LangChain (v0.1.x)
+    from langchain.chains.retrieval_qa.base import RetrievalQA
+    from langchain.chains.combine_documents.stuff import StuffDocumentsChain as create_stuff_documents_chain
+    USE_NEW_API = False
+
+# -----------------------------
+# Prompt Template for Retrieval
 # -----------------------------
 combined_template = f"""{system_prompt}
 
@@ -111,13 +121,23 @@ Question: {{question}}
 Answer:"""
 
 retrieval_prompt = ChatPromptTemplate.from_template(combined_template)
-
-# Create new style retrieval chain
 question_answer_chain = create_stuff_documents_chain(llm, retrieval_prompt)
-retrieval_chain = create_retrieval_chain(retriever=retriever, combine_documents_chain=question_answer_chain)
 
 # -----------------------------
-# Query Processing
+# Build retrieval chain safely
+# -----------------------------
+if USE_NEW_API:
+    retrieval_chain = create_retrieval_chain(retriever=retriever, combine_documents_chain=question_answer_chain)
+else:
+    retrieval_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        chain_type="stuff",
+        retriever=retriever,
+        chain_type_kwargs={"prompt": retrieval_prompt}
+    )
+
+# -----------------------------
+# Process Query
 # -----------------------------
 def process_query(query: str):
     try:
@@ -143,10 +163,13 @@ def process_query(query: str):
         else:
             refined_query = str(refined_query_msg).strip()
 
-        # Step 2: Run retrieval chain
+        # Step 2: Query retrieval chain
         for attempt in range(max_retries):
             try:
-                response_msg = retrieval_chain.invoke({"input": refined_query})
+                if USE_NEW_API:
+                    response_msg = retrieval_chain.invoke({"input": refined_query})
+                else:
+                    response_msg = retrieval_chain.invoke(refined_query)
                 break
             except Exception as e:
                 if "429" in str(e) and attempt < max_retries - 1:
@@ -155,9 +178,9 @@ def process_query(query: str):
                 else:
                     raise e
 
-        # Step 3: Extract response
+        # Step 3: Extract result
         if isinstance(response_msg, dict):
-            response = response_msg.get("answer", "") or response_msg.get("output", "")
+            response = response_msg.get("answer") or response_msg.get("result") or str(response_msg)
         elif hasattr(response_msg, 'content'):
             response = response_msg.content
         else:
@@ -167,7 +190,7 @@ def process_query(query: str):
 
     except Exception as e:
         if "429" in str(e):
-            return "⚠️ The AI service is currently experiencing high demand. Please try again in a few moments."
+            return "⚠️ The AI service is experiencing high demand. Please try again shortly."
         else:
             return f"An error occurred: {str(e)}"
 
@@ -175,7 +198,7 @@ def process_query(query: str):
 # Streamlit UI
 # -----------------------------
 st.title("Legal Egg AI 🥚")
-st.write("Welcome to Research Assistant of Serbian Supreme Court Criminal Practices!")
+st.write("Welcome to the Serbian Supreme Court Criminal Practices Assistant!")
 
 with st.sidebar:
     st.header("Common Criminal Law Queries")
@@ -199,9 +222,7 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-# -----------------------------
-# Chat History
-# -----------------------------
+# Chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -209,10 +230,8 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.write(message["content"])
 
-# -----------------------------
-# Chat Input
-# -----------------------------
-if prompt := st.chat_input("ask question..."):
+# Chat input
+if prompt := st.chat_input("Ask a legal question..."):
     with st.chat_message("user"):
         st.write(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
